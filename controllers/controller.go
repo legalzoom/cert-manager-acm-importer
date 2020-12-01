@@ -7,31 +7,33 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/acm"
+	aws2 "github.com/backjo/aws-cert-importer/pkg/aws"
+	"github.com/go-logr/logr"
+	cmapiv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
+	cmmetav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 	"go.uber.org/zap"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"strconv"
 	"strings"
-
-	"github.com/go-logr/logr"
-	cmapiv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type AcmCertificate struct {
-	summary *acm.CertificateSummary
-	tags    []*acm.Tag
+	Summary *acm.CertificateSummary
+	Tags    []*acm.Tag
 }
 
 // CertificateReconciler reconciles a CronJob object
 type CertificateReconciler struct {
 	client.Client
-	Log    logr.Logger
-	Scheme *runtime.Scheme
-	Cache  map[string]*AcmCertificate
+	Log        logr.Logger
+	Scheme     *runtime.Scheme
+	Cache      map[string]*AcmCertificate
+	AcmService aws2.IAcmService
 }
 
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificate,verbs=get;list;watch;update;patch
@@ -46,6 +48,9 @@ var (
 func (r *CertificateReconciler) InitializeCache() {
 	sess := session.Must(session.NewSession())
 	acmClient := acm.New(sess)
+
+	r.AcmService = &aws2.AcmService{Client: acmClient}
+
 	certs, err := acmClient.ListCertificates(&acm.ListCertificatesInput{})
 	if err == nil {
 		for _, cert := range certs.CertificateSummaryList {
@@ -53,8 +58,8 @@ func (r *CertificateReconciler) InitializeCache() {
 			for _, tag := range output.Tags {
 				if *tag.Key == certIdAnnotation {
 					r.Cache[*tag.Value] = &AcmCertificate{
-						summary: cert,
-						tags:    output.Tags,
+						Summary: cert,
+						Tags:    output.Tags,
 					}
 				}
 			}
@@ -64,7 +69,13 @@ func (r *CertificateReconciler) InitializeCache() {
 	}
 }
 
-func (r *CertificateReconciler) GetImportCertificateInput(certificate cmapiv1.Certificate, summary *acm.CertificateSummary, tags []*acm.Tag) acm.ImportCertificateInput {
+type Certificate struct {
+	privateKey           []byte
+	certificate          []byte
+	certificateAuthority []byte
+}
+
+func (r *CertificateReconciler) GetCertificateSecret(certificate cmapiv1.Certificate) *Certificate {
 	var secret = &v1.Secret{}
 	ctx := context.Background()
 	_ = r.Get(ctx, types.NamespacedName{
@@ -73,6 +84,7 @@ func (r *CertificateReconciler) GetImportCertificateInput(certificate cmapiv1.Ce
 	}, secret)
 	tlsKey := secret.Data["tls.key"]
 	tlsCrt := secret.Data["tls.crt"]
+
 	scanner := bufio.NewScanner(strings.NewReader(string(tlsCrt)))
 
 	var certBuffer bytes.Buffer
@@ -91,41 +103,53 @@ func (r *CertificateReconciler) GetImportCertificateInput(certificate cmapiv1.Ce
 			certBuffer.WriteString("\n")
 		}
 	}
+
+	return &Certificate{
+		privateKey:           tlsKey,
+		certificate:          certBuffer.Bytes(),
+		certificateAuthority: caBuffer.Bytes(),
+	}
+}
+
+func (r *CertificateReconciler) GetImportCertificateInput(certificate cmapiv1.Certificate, summary *acm.CertificateSummary, existingTags []*acm.Tag) acm.ImportCertificateInput {
+	var certRevision int
+	var certificateArn *string
+
+	if certificate.Status.Revision != nil {
+		certRevision = *certificate.Status.Revision
+	}
+
+	certificateData := r.GetCertificateSecret(certificate)
+	tags := []*acm.Tag{}
+
+	tags = append(tags, &acm.Tag{
+		Key:   aws.String(certRevisionAnnotation),
+		Value: aws.String(strconv.Itoa(certRevision)),
+	})
+
+	tags = append(tags, &acm.Tag{
+		Key: aws.String(certIdAnnotation),
+		Value: aws.String(types.NamespacedName{
+			Namespace: certificate.Namespace,
+			Name:      certificate.Name,
+		}.String()),
+	})
+
 	if summary != nil {
-		for _, tag := range tags {
-			if *tag.Key == certRevisionAnnotation {
-				*tag.Value = strconv.Itoa(*certificate.Status.Revision)
+		certificateArn = summary.CertificateArn
+		for _, tag := range existingTags {
+			if *tag.Key != certRevisionAnnotation && *tag.Key != certIdAnnotation {
+				tags = append(tags, tag)
 			}
 		}
+	}
 
-		return acm.ImportCertificateInput{
-			Certificate:      certBuffer.Bytes(),
-			CertificateArn:   summary.CertificateArn,
-			CertificateChain: caBuffer.Bytes(),
-			PrivateKey:       tlsKey,
-			Tags:             tags,
-		}
-	} else {
-		newTags := []*acm.Tag{
-			{
-				Key:   aws.String(certRevisionAnnotation),
-				Value: aws.String(strconv.Itoa(*certificate.Status.Revision)),
-			},
-			{
-				Key: aws.String(certIdAnnotation),
-				Value: aws.String(types.NamespacedName{
-					Namespace: certificate.Namespace,
-					Name:      certificate.Name,
-				}.String()),
-			},
-		}
-
-		return acm.ImportCertificateInput{
-			Certificate:      certBuffer.Bytes(),
-			CertificateChain: caBuffer.Bytes(),
-			PrivateKey:       tlsKey,
-			Tags:             newTags,
-		}
+	return acm.ImportCertificateInput{
+		Certificate:      certificateData.certificate,
+		CertificateArn:   certificateArn,
+		CertificateChain: certificateData.certificateAuthority,
+		PrivateKey:       certificateData.privateKey,
+		Tags:             tags,
 	}
 }
 
@@ -148,112 +172,126 @@ func removeString(slice []string, s string) (result []string) {
 	return
 }
 
+func (r *CertificateReconciler) CertificateNeedsUpdated(req ctrl.Request, certificate *cmapiv1.Certificate) bool {
+	existingCert := r.Cache[req.NamespacedName.String()]
+	if existingCert != nil && certificate.Status.Revision != nil {
+		resolvedAcmTags := existingCert.Tags
+
+		for _, tag := range resolvedAcmTags {
+			if *tag.Key == certRevisionAnnotation {
+				awsRevision, _ := strconv.Atoi(*tag.Value)
+				return awsRevision < *certificate.Status.Revision
+			}
+		}
+		return true
+	} else {
+		for _, condition := range certificate.Status.Conditions {
+			if condition.Type == cmapiv1.CertificateConditionReady {
+				if condition.Status == cmmetav1.ConditionTrue {
+					return true
+				} else {
+					return false
+				}
+			}
+		}
+		return false
+	}
+}
+
+func (r *CertificateReconciler) CertificateIsManaged(certificate *cmapiv1.Certificate) bool {
+	importToAcm := certificate.Annotations["legalzoom.com/import-to-acm"]
+	return importToAcm == "true"
+}
+
+func (r *CertificateReconciler) AddFinalizerIfNeeded(certificate *cmapiv1.Certificate) bool {
+	foundFinalizer := false
+	for _, certFinalizer := range certificate.Finalizers {
+		if certFinalizer == finalizer {
+			foundFinalizer = true
+		}
+	}
+
+	if !foundFinalizer {
+		certificate.Finalizers = append(certificate.Finalizers, finalizer)
+		return true
+	}
+	return false
+}
+
 func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	sess := session.Must(session.NewSession())
 	ctx := context.Background()
-	acmClient := acm.New(sess)
 
 	var certificate cmapiv1.Certificate
 	if err := r.Get(ctx, req.NamespacedName, &certificate); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	importToAcm := certificate.Annotations["legalzoom.com/import-to-acm"]
 	var resolvedAcmCertificate *acm.CertificateSummary
 	var resolvedAcmTags []*acm.Tag
-
-	if !certificate.ObjectMeta.DeletionTimestamp.IsZero() {
-		//handle delete
-		if contains(certificate.ObjectMeta.Finalizers, finalizer) {
-			zap.S().Info("Attempting to delete in ACM ", req.NamespacedName.String())
-			_, err := acmClient.DeleteCertificate(&acm.DeleteCertificateInput{
-				CertificateArn: r.Cache[req.NamespacedName.String()].summary.CertificateArn,
-			})
-
-			if err == nil {
-				r.Cache[req.NamespacedName.String()] = nil
-			} else {
-				zap.S().Errorw("Failed to delete certificate in ACM",
-					zap.Error(err),
-					zap.String("certificate", req.NamespacedName.String()),
-					zap.String("arn", *r.Cache[req.NamespacedName.String()].summary.CertificateArn),
-				)
-				return ctrl.Result{}, err
-			}
-
-			certificate.ObjectMeta.Finalizers = removeString(certificate.ObjectMeta.Finalizers, finalizer)
-			if err := r.Update(context.Background(), &certificate); err != nil {
-				return reconcile.Result{}, err
-			}
-
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if importToAcm == "true" {
+	if r.CertificateIsManaged(&certificate) {
 		zap.S().Info("Reconciling ", req.NamespacedName.String())
-		existingCert := r.Cache[req.NamespacedName.String()]
-		if existingCert != nil {
-			resolvedAcmCertificate = existingCert.summary
-			resolvedAcmTags = existingCert.tags
-		}
 
-		if resolvedAcmCertificate != nil && certificate.Status.Revision != nil {
-			var revision int
-			for _, tag := range resolvedAcmTags {
-				if *tag.Key == certRevisionAnnotation {
-					revision, _ = strconv.Atoi(*tag.Value)
-				}
-			}
-			if revision < *certificate.Status.Revision {
-				zap.S().Info(req.NamespacedName.String(), "Revision in Certificate Resource is newer than in ACM. Attempting to re-import")
-				var importCertificateInput = r.GetImportCertificateInput(certificate, resolvedAcmCertificate, resolvedAcmTags)
-				tags := importCertificateInput.Tags
-				importCertificateInput.Tags = nil
-				result, err := acmClient.ImportCertificate(&importCertificateInput)
-				if err != nil {
-					zap.S().Errorw("Failed to re-import certificate in ACM", zap.Error(err), zap.String("certificate", req.NamespacedName.String()))
+		if !certificate.ObjectMeta.DeletionTimestamp.IsZero() {
+			if contains(certificate.ObjectMeta.Finalizers, finalizer) {
+				zap.S().Info("Attempting to delete in ACM ", req.NamespacedName.String())
+				_, err := r.AcmService.DeleteCertificate(&acm.DeleteCertificateInput{
+					CertificateArn: r.Cache[req.NamespacedName.String()].Summary.CertificateArn,
+				})
+
+				if err == nil {
+					r.Cache[req.NamespacedName.String()] = nil
 				} else {
-					zap.S().Infow("Reimported into ACM",
-						zap.String("arn", *result.CertificateArn),
-						zap.String("certificate", req.NamespacedName.String()),
-					)
-					_, err = acmClient.AddTagsToCertificate(&acm.AddTagsToCertificateInput{
-						CertificateArn: importCertificateInput.CertificateArn,
-						Tags:           tags,
-					})
-					if err != nil {
-						r.Cache[req.NamespacedName.String()].tags = tags
+					if _, ok := err.(*acm.ResourceNotFoundException); ok {
+						err = nil
+						zap.S().Errorw("Failed to delete certificate in ACM. Not found. Removing finalizer.",
+							zap.Error(err),
+							zap.String("certificate", req.NamespacedName.String()),
+							zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
+						)
+					} else {
+						zap.S().Errorw("Failed to delete certificate in ACM",
+							zap.Error(err),
+							zap.String("certificate", req.NamespacedName.String()),
+							zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
+						)
 						return ctrl.Result{}, err
 					}
 				}
-				return ctrl.Result{}, nil
-			}
-		} else if certificate.Status.Revision != nil {
-			var importCertificateInput = r.GetImportCertificateInput(certificate, nil, nil)
-			result, err := acmClient.ImportCertificate(&importCertificateInput)
-			if err != nil {
-				zap.S().Errorw("Error importing new certificate", zap.Error(err))
+
+				certificate.ObjectMeta.Finalizers = removeString(certificate.ObjectMeta.Finalizers, finalizer)
+				if err := r.Update(context.Background(), &certificate); err != nil {
+					return reconcile.Result{}, err
+				}
+
 				return ctrl.Result{}, err
-			} else if result != nil {
-				zap.S().Infow("Imported new certificate into ACM",
-					zap.String("arn", *result.CertificateArn),
-					zap.String("certificate", req.NamespacedName.String()),
-				)
-				_ = r.Get(ctx, req.NamespacedName, &certificate)
-				certificate.ObjectMeta.Finalizers = append(certificate.ObjectMeta.Finalizers, finalizer)
-				err = r.Update(context.Background(), &certificate)
-				if err != nil {
-					zap.S().Error(err)
-				}
-				r.Cache[req.NamespacedName.String()] = &AcmCertificate{
-					summary: &acm.CertificateSummary{
-						CertificateArn: result.CertificateArn,
-					},
-					tags: importCertificateInput.Tags,
-				}
-				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, nil
+		}
+
+		if r.CertificateNeedsUpdated(req, &certificate) {
+			existingCert := r.Cache[req.NamespacedName.String()]
+			if existingCert != nil {
+				resolvedAcmCertificate = existingCert.Summary
+				resolvedAcmTags = existingCert.Tags
+			}
+
+			var importCertificateInput = r.GetImportCertificateInput(certificate, resolvedAcmCertificate, resolvedAcmTags)
+			result, err := r.AcmService.UpsertCertificate(&importCertificateInput)
+
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			r.Cache[req.NamespacedName.String()] = &AcmCertificate{
+				Summary: &acm.CertificateSummary{
+					CertificateArn: result.CertificateArn,
+				},
+				Tags: result.Tags,
+			}
+		}
+
+		if r.AddFinalizerIfNeeded(&certificate) {
+			if err := r.Update(context.Background(), &certificate); err != nil {
+				return reconcile.Result{}, err
 			}
 		}
 	}

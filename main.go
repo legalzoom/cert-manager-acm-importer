@@ -18,6 +18,9 @@ package main
 
 import (
 	"flag"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/acm"
+	"github.com/backjo/aws-cert-importer/pkg/aws"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"os"
@@ -80,11 +83,16 @@ func main() {
 	loggerMgr := initZapLog()
 	zap.ReplaceGlobals(loggerMgr)
 	defer loggerMgr.Sync() // flushes buffer, if any
+	sess := session.Must(session.NewSession())
+	acmClient := acm.New(sess)
+
+	AcmService := &aws.AcmService{Client: acmClient}
 	if err = (&controllers.CertificateReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Certificate"),
-		Scheme: mgr.GetScheme(),
-		Cache:  make(map[string]*controllers.AcmCertificate),
+		Client:     mgr.GetClient(),
+		Log:        ctrl.Log.WithName("controllers").WithName("Certificate"),
+		Scheme:     mgr.GetScheme(),
+		Cache:      make(map[string]*controllers.AcmCertificate),
+		AcmService: AcmService,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Deployment")
 		os.Exit(1)
