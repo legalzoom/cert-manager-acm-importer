@@ -89,6 +89,7 @@ func main() {
 	AcmService := &aws.AcmService{Client: acmClient}
 	if err = (&controllers.CertificateReconciler{
 		Client:     mgr.GetClient(),
+		APIReader:  mgr.GetAPIReader(),
 		Log:        ctrl.Log.WithName("controllers").WithName("Certificate"),
 		Scheme:     mgr.GetScheme(),
 		Cache:      make(map[string]*controllers.AcmCertificate),

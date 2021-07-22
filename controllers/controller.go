@@ -30,6 +30,7 @@ type AcmCertificate struct {
 // CertificateReconciler reconciles a CronJob object
 type CertificateReconciler struct {
 	client.Client
+	APIReader  client.Reader
 	Log        logr.Logger
 	Scheme     *runtime.Scheme
 	Cache      map[string]*AcmCertificate
@@ -78,7 +79,7 @@ type Certificate struct {
 func (r *CertificateReconciler) GetCertificateSecret(certificate cmapiv1.Certificate) *Certificate {
 	var secret = &v1.Secret{}
 	ctx := context.Background()
-	_ = r.Get(ctx, types.NamespacedName{
+	_ = r.APIReader.Get(ctx, types.NamespacedName{
 		Namespace: certificate.Namespace,
 		Name:      certificate.Spec.SecretName,
 	}, secret)
