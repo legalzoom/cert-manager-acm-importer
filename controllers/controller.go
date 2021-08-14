@@ -235,27 +235,32 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 		if !certificate.ObjectMeta.DeletionTimestamp.IsZero() {
 			if contains(certificate.ObjectMeta.Finalizers, finalizer) {
 				zap.S().Info("Attempting to delete in ACM ", req.NamespacedName.String())
-				_, err := r.AcmService.DeleteCertificate(&acm.DeleteCertificateInput{
-					CertificateArn: r.Cache[req.NamespacedName.String()].Summary.CertificateArn,
-				})
 
-				if err == nil {
-					r.Cache[req.NamespacedName.String()] = nil
+				if r.Cache[req.NamespacedName.String()] == nil {
+					zap.S().Info("Didn't find certificate. Must not have been issued. ", req.NamespacedName.String())
 				} else {
-					if _, ok := err.(*acm.ResourceNotFoundException); ok {
-						err = nil
-						zap.S().Errorw("Failed to delete certificate in ACM. Not found. Removing finalizer.",
-							zap.Error(err),
-							zap.String("certificate", req.NamespacedName.String()),
-							zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
-						)
+					_, err := r.AcmService.DeleteCertificate(&acm.DeleteCertificateInput{
+						CertificateArn: r.Cache[req.NamespacedName.String()].Summary.CertificateArn,
+					})
+
+					if err == nil {
+						r.Cache[req.NamespacedName.String()] = nil
 					} else {
-						zap.S().Errorw("Failed to delete certificate in ACM",
-							zap.Error(err),
-							zap.String("certificate", req.NamespacedName.String()),
-							zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
-						)
-						return ctrl.Result{}, err
+						if _, ok := err.(*acm.ResourceNotFoundException); ok {
+							err = nil
+							zap.S().Errorw("Failed to delete certificate in ACM. Not found. Removing finalizer.",
+								zap.Error(err),
+								zap.String("certificate", req.NamespacedName.String()),
+								zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
+							)
+						} else {
+							zap.S().Errorw("Failed to delete certificate in ACM",
+								zap.Error(err),
+								zap.String("certificate", req.NamespacedName.String()),
+								zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
+							)
+							return ctrl.Result{}, err
+						}
 					}
 				}
 
@@ -264,7 +269,7 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 					return reconcile.Result{}, err
 				}
 
-				return ctrl.Result{}, err
+				return ctrl.Result{}, nil
 			}
 			return ctrl.Result{}, nil
 		}
