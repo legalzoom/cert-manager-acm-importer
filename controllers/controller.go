@@ -220,9 +220,9 @@ func (r *CertificateReconciler) AddMetadataIfNeeded(certificate *cmapiv1.Certifi
 		updateRequired = true
 	}
 
-	if certificate.ObjectMeta.Labels["legalzoom.com/certificate-arn"] == "" && r.Cache[namespacedName] != nil {
-		zap.S().Info("Adding arn label for certificate ", namespacedName)
-		certificate.ObjectMeta.Labels["legalzoom.com/certificate-arn"] = *r.Cache[namespacedName].Summary.CertificateArn
+	if certificate.ObjectMeta.Annotations["legalzoom.com/certificate-arn"] == "" && r.Cache[namespacedName] != nil {
+		zap.S().Info("Setting arn annotation for certificate ", namespacedName)
+		certificate.ObjectMeta.Annotations["legalzoom.com/certificate-arn"] = *r.Cache[namespacedName].Summary.CertificateArn
 		updateRequired = true
 	}
 
