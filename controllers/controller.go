@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type AcmCertificate struct {
@@ -44,6 +45,7 @@ var (
 	certIdAnnotation       = "legalzoom.com/cert-importer/cert-id"
 	certRevisionAnnotation = "legalzoom.com/cert-importer/cert-revision"
 	finalizer              = "certificate.legalzoom.com"
+	mutex                  = &sync.Mutex{}
 )
 
 func (r *CertificateReconciler) InitializeCache() {
@@ -204,8 +206,9 @@ func (r *CertificateReconciler) CertificateIsManaged(certificate *cmapiv1.Certif
 	return importToAcm == "true"
 }
 
-func (r *CertificateReconciler) AddFinalizerIfNeeded(certificate *cmapiv1.Certificate) bool {
+func (r *CertificateReconciler) AddMetadataIfNeeded(certificate *cmapiv1.Certificate, namespacedName string) bool {
 	foundFinalizer := false
+	updateRequired := false
 	for _, certFinalizer := range certificate.Finalizers {
 		if certFinalizer == finalizer {
 			foundFinalizer = true
@@ -214,9 +217,15 @@ func (r *CertificateReconciler) AddFinalizerIfNeeded(certificate *cmapiv1.Certif
 
 	if !foundFinalizer {
 		certificate.Finalizers = append(certificate.Finalizers, finalizer)
-		return true
+		updateRequired = true
 	}
-	return false
+
+	if certificate.ObjectMeta.Labels["legalzoom.com/certificate-arn"] == "" && r.Cache[namespacedName] != nil {
+		certificate.ObjectMeta.Labels["legalzoom.com/certificate-arn"] = *r.Cache[namespacedName].Summary.CertificateArn
+		updateRequired = true
+	}
+
+	return updateRequired
 }
 
 func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
@@ -275,6 +284,11 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 		}
 
 		if r.CertificateNeedsUpdated(req, &certificate) {
+			mutex.Lock()
+			if !r.CertificateNeedsUpdated(req, &certificate) {
+				mutex.Unlock()
+				return reconcile.Result{}, nil
+			}
 			existingCert := r.Cache[req.NamespacedName.String()]
 			if existingCert != nil {
 				resolvedAcmCertificate = existingCert.Summary
@@ -285,6 +299,8 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 			result, err := r.AcmService.UpsertCertificate(&importCertificateInput)
 
 			if err != nil {
+				zap.S().Error("Error occurred updating cert", zap.String("certificate", req.NamespacedName.String()), zap.Error(err))
+				mutex.Unlock()
 				return ctrl.Result{}, err
 			}
 			r.Cache[req.NamespacedName.String()] = &AcmCertificate{
@@ -293,9 +309,10 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 				},
 				Tags: result.Tags,
 			}
+			mutex.Unlock()
 		}
 
-		if r.AddFinalizerIfNeeded(&certificate) {
+		if r.AddMetadataIfNeeded(&certificate, req.NamespacedName.String()) {
 			if err := r.Update(context.Background(), &certificate); err != nil {
 				return reconcile.Result{}, err
 			}

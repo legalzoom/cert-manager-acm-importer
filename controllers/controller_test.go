@@ -49,8 +49,8 @@ func TestImport(t *testing.T) {
 			Annotations: map[string]string{
 				"legalzoom.com/import-to-acm": "true",
 			},
-			Name:      "bar",
-			Namespace: "foo",
+			Name:       "bar",
+			Namespace:  "foo",
 			Finalizers: []string{"certificate.legalzoom.com"},
 		},
 		Spec: cmapiv1.CertificateSpec{
@@ -86,9 +86,9 @@ func TestImport(t *testing.T) {
 
 	controller.Cache["foo/bar"] = &controllers.AcmCertificate{
 		Summary: &acm.CertificateSummary{},
-		Tags:    []*acm.Tag{
+		Tags: []*acm.Tag{
 			{
-				Key: aws2.String("legalzoom.com/cert-importer/cert-revision"),
+				Key:   aws2.String("legalzoom.com/cert-importer/cert-revision"),
 				Value: aws2.String("1"),
 			},
 		},
@@ -127,7 +127,7 @@ func TestImportExistingCertWithoutRevision(t *testing.T) {
 		Status: cmapiv1.CertificateStatus{
 			Conditions: []cmapiv1.CertificateCondition{
 				{
-					Type: cmapiv1.CertificateConditionReady,
+					Type:   cmapiv1.CertificateConditionReady,
 					Status: cmmetav1.ConditionTrue,
 				},
 			},
@@ -190,7 +190,7 @@ func TestImportNotReadyCert(t *testing.T) {
 		Status: cmapiv1.CertificateStatus{
 			Conditions: []cmapiv1.CertificateCondition{
 				{
-					Type: cmapiv1.CertificateConditionReady,
+					Type:   cmapiv1.CertificateConditionReady,
 					Status: cmmetav1.ConditionFalse,
 				},
 			},
