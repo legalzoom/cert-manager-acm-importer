@@ -49,6 +49,9 @@ func TestImport(t *testing.T) {
 			Annotations: map[string]string{
 				"legalzoom.com/import-to-acm": "true",
 			},
+			Labels: map[string]string{
+				"foo": "bar",
+			},
 			Name:       "bar",
 			Namespace:  "foo",
 			Finalizers: []string{"certificate.legalzoom.com"},
@@ -82,6 +85,7 @@ func TestImport(t *testing.T) {
 		Scheme:     nil,
 		Cache:      make(map[string]*controllers.AcmCertificate),
 		AcmService: mockService,
+		APIReader: client,
 	}
 
 	controller.Cache["foo/bar"] = &controllers.AcmCertificate{

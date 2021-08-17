@@ -221,6 +221,7 @@ func (r *CertificateReconciler) AddMetadataIfNeeded(certificate *cmapiv1.Certifi
 	}
 
 	if certificate.ObjectMeta.Labels["legalzoom.com/certificate-arn"] == "" && r.Cache[namespacedName] != nil {
+		zap.S().Info("Adding arn label for certificate ", namespacedName)
 		certificate.ObjectMeta.Labels["legalzoom.com/certificate-arn"] = *r.Cache[namespacedName].Summary.CertificateArn
 		updateRequired = true
 	}
@@ -314,6 +315,7 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 
 		if r.AddMetadataIfNeeded(&certificate, req.NamespacedName.String()) {
 			if err := r.Update(context.Background(), &certificate); err != nil {
+				zap.S().Error("Error occurred updating cert", zap.String("certificate", req.NamespacedName.String()), zap.Error(err))
 				return reconcile.Result{}, err
 			}
 		}
