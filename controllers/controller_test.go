@@ -85,7 +85,7 @@ func TestImport(t *testing.T) {
 		Scheme:     nil,
 		Cache:      make(map[string]*controllers.AcmCertificate),
 		AcmService: mockService,
-		APIReader: client,
+		APIReader:  client,
 	}
 
 	controller.Cache["foo/bar"] = &controllers.AcmCertificate{

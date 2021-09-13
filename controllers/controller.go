@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"strconv"
 	"strings"
@@ -52,23 +53,34 @@ func (r *CertificateReconciler) InitializeCache() {
 	sess := session.Must(session.NewSession())
 	acmClient := acm.New(sess)
 
-	r.AcmService = &aws2.AcmService{Client: acmClient}
+	getNextPage := true
+	nextToken := aws.String("")
+	nextToken = nil
 
-	certs, err := acmClient.ListCertificates(&acm.ListCertificatesInput{})
-	if err == nil {
-		for _, cert := range certs.CertificateSummaryList {
-			output, _ := acmClient.ListTagsForCertificate(&acm.ListTagsForCertificateInput{CertificateArn: cert.CertificateArn})
-			for _, tag := range output.Tags {
-				if *tag.Key == certIdAnnotation {
-					r.Cache[*tag.Value] = &AcmCertificate{
-						Summary: cert,
-						Tags:    output.Tags,
+	r.AcmService = &aws2.AcmService{Client: acmClient}
+	for getNextPage == true {
+		certs, err := acmClient.ListCertificates(&acm.ListCertificatesInput{NextToken: nextToken})
+		if err == nil {
+			if certs.NextToken != nil && len(*certs.NextToken) > 0 {
+				getNextPage = true
+				nextToken = aws.String(*certs.NextToken)
+			} else {
+				getNextPage = false
+			}
+			for _, cert := range certs.CertificateSummaryList {
+				output, _ := acmClient.ListTagsForCertificate(&acm.ListTagsForCertificateInput{CertificateArn: cert.CertificateArn})
+				for _, tag := range output.Tags {
+					if *tag.Key == certIdAnnotation {
+						r.Cache[*tag.Value] = &AcmCertificate{
+							Summary: cert,
+							Tags:    output.Tags,
+						}
 					}
 				}
 			}
+		} else {
+			zap.S().Error("error received", err)
 		}
-	} else {
-		zap.S().Error("error received", err)
 	}
 }
 
@@ -328,5 +340,6 @@ func (r *CertificateReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.InitializeCache()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cmapiv1.Certificate{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 5}).
 		Complete(r)
 }
