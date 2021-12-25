@@ -159,6 +159,7 @@ func TestImportExistingCertWithoutRevision(t *testing.T) {
 		Scheme:     nil,
 		Cache:      make(map[string]*controllers.AcmCertificate),
 		AcmService: mockService,
+		APIReader:  client,
 	}
 
 	controller.Reconcile(ctrl.Request{NamespacedName: types.NamespacedName{

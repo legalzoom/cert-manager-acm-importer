@@ -46,7 +46,7 @@ var (
 	certIdAnnotation       = "legalzoom.com/cert-importer/cert-id"
 	certRevisionAnnotation = "legalzoom.com/cert-importer/cert-revision"
 	finalizer              = "certificate.legalzoom.com"
-	mutex                  = &sync.Mutex{}
+	mutex                  = &sync.RWMutex{}
 )
 
 func (r *CertificateReconciler) InitializeCache() {
@@ -257,29 +257,33 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 		if !certificate.ObjectMeta.DeletionTimestamp.IsZero() {
 			if contains(certificate.ObjectMeta.Finalizers, finalizer) {
 				zap.S().Info("Attempting to delete in ACM ", req.NamespacedName.String())
-
-				if r.Cache[req.NamespacedName.String()] == nil {
+				mutex.RLock()
+				cachedEntry := r.Cache[req.NamespacedName.String()]
+				mutex.RUnlock()
+				if cachedEntry == nil {
 					zap.S().Info("Didn't find certificate. Must not have been issued. ", req.NamespacedName.String())
 				} else {
 					_, err := r.AcmService.DeleteCertificate(&acm.DeleteCertificateInput{
-						CertificateArn: r.Cache[req.NamespacedName.String()].Summary.CertificateArn,
+						CertificateArn: cachedEntry.Summary.CertificateArn,
 					})
 
 					if err == nil {
+						mutex.Lock()
 						r.Cache[req.NamespacedName.String()] = nil
+						mutex.Unlock()
 					} else {
 						if _, ok := err.(*acm.ResourceNotFoundException); ok {
 							err = nil
 							zap.S().Errorw("Failed to delete certificate in ACM. Not found. Removing finalizer.",
 								zap.Error(err),
 								zap.String("certificate", req.NamespacedName.String()),
-								zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
+								zap.String("arn", *cachedEntry.Summary.CertificateArn),
 							)
 						} else {
 							zap.S().Errorw("Failed to delete certificate in ACM",
 								zap.Error(err),
 								zap.String("certificate", req.NamespacedName.String()),
-								zap.String("arn", *r.Cache[req.NamespacedName.String()].Summary.CertificateArn),
+								zap.String("arn", *cachedEntry.Summary.CertificateArn),
 							)
 							return ctrl.Result{}, err
 						}
@@ -297,25 +301,27 @@ func (r *CertificateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 		}
 
 		if r.CertificateNeedsUpdated(req, &certificate) {
-			mutex.Lock()
+			mutex.RLock()
 			if !r.CertificateNeedsUpdated(req, &certificate) {
-				mutex.Unlock()
+				mutex.RUnlock()
 				return reconcile.Result{}, nil
 			}
 			existingCert := r.Cache[req.NamespacedName.String()]
 			if existingCert != nil {
 				resolvedAcmCertificate = existingCert.Summary
 				resolvedAcmTags = existingCert.Tags
+			} else if certificate.ObjectMeta.Annotations["legalzoom.com/certificate-arn"] != "" {
+				zap.S().Error("Expected to find certificate in cache but was not available. ")
 			}
 
 			var importCertificateInput = r.GetImportCertificateInput(certificate, resolvedAcmCertificate, resolvedAcmTags)
 			result, err := r.AcmService.UpsertCertificate(&importCertificateInput)
-
+			mutex.RUnlock()
 			if err != nil {
 				zap.S().Error("Error occurred updating cert", zap.String("certificate", req.NamespacedName.String()), zap.Error(err))
-				mutex.Unlock()
 				return ctrl.Result{}, err
 			}
+			mutex.Lock()
 			r.Cache[req.NamespacedName.String()] = &AcmCertificate{
 				Summary: &acm.CertificateSummary{
 					CertificateArn: result.CertificateArn,
