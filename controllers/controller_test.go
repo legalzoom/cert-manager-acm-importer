@@ -3,8 +3,8 @@ package controllers_test
 import (
 	aws2 "github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/acm"
-	"github.com/backjo/aws-cert-importer/controllers"
-	"github.com/backjo/aws-cert-importer/pkg/aws"
+	"github.com/legalzoom/cert-manager-acm-importer/controllers"
+	"github.com/legalzoom/cert-manager-acm-importer/pkg/aws"
 	cmapiv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
 	cmmetav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"

@@ -7,7 +7,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/acm"
-	aws2 "github.com/backjo/aws-cert-importer/pkg/aws"
+	aws2 "github.com/legalzoom/cert-manager-acm-importer/pkg/aws"
 	"github.com/go-logr/logr"
 	cmapiv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
 	cmmetav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
