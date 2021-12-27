@@ -20,7 +20,7 @@ import (
 	"flag"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/acm"
-	"github.com/backjo/aws-cert-importer/pkg/aws"
+	"github.com/legalzoom/cert-manager-acm-importer/pkg/aws"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"os"
@@ -33,7 +33,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/backjo/aws-cert-importer/controllers"
+	"github.com/legalzoom/cert-manager-acm-importer/controllers"
 	// +kubebuilder:scaffold:imports
 )
 

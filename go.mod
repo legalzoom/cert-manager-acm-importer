@@ -1,6 +1,6 @@
-module github.com/backjo/aws-cert-importer
+module github.com/legalzoom/cert-manager-acm-importer
 
-go 1.13
+go 1.16
 
 require (
 	github.com/aws/aws-sdk-go v1.31.3
