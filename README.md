@@ -3,7 +3,7 @@ This project handles syncing certificates managed in kubernetes into AWS ACM, so
 
 
 Basic usage:
-To import a certificate to ACM automatically, annotate the Certificate resource with `legalzoom.com/import-to-acm`. 
+To import a certificate to ACM automatically, annotate the Certificate resource with `legalzoom.com/import-to-acm: 'true'`. 
 
 Permissions:
 This controller requires List,Get,Watch permissions on Secrets and Certificates across any namespaces that you wish to allow certificates to be imported into ACM.
