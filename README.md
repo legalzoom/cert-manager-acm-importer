@@ -1,4 +1,4 @@
-#README
+# README
 This project handles syncing certificates managed in kubernetes into AWS ACM, so that they can be used with Application Load Balancers
 
 
